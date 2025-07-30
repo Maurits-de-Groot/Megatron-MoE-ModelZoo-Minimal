@@ -1,5 +1,5 @@
 TOKENIZER_MODEL="${WORKDIR}/hf_checkpoint/tokenizer.model"
-MEGATRON_PATH="${WORKDIR}/megatron-lm-convert"
+MEGATRON_PATH="${WORKDIR}/Megatron-LM"
 export PYTHONPATH=$MEGATRON_PATH:$PYTHONPATH
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
@@ -10,7 +10,7 @@ TARGET_PP_SIZE="8"
 HF_FORMAT_DIR="${WORKDIR}/hf_checkpoint"
 MEGATRON_FORMAT_DIR="${WORKDIR}/checkpoints/mixtral-mcore-TP${TARGET_TP_SIZE}PP${TARGET_PP_SIZE}EP${TARGET_EP_SIZE}"
 
-torchrun --standalone --nnodes=1 --nproc_per_node=1 ${WORKDIR}/megatron-lm-convert/tools/checkpoint/convert.py \
+torchrun --standalone --nnodes=1 --nproc_per_node=1 ${WORKDIR}/Megatron-LM/tools/checkpoint/convert.py \
 --model-type GPT \
 --loader mixtral_hf \
 --saver mcore \

@@ -41,9 +41,9 @@ RUN unset PIP_CONSTRAINT && pip install debugpy dm-tree torch_tb_profiler einops
 #   Update to v9.11.0 for better performance: https://developer.nvidia.com/cudnn-downloads
 # =========================
 # Uncomment the following lines to update cudnn
-COPY ./cudnn/include/ /usr/include/
-COPY ./cudnn/include/ /usr/include/x86_64-linux-gnu/
-COPY ./cudnn/lib/ /usr/local/cuda/targets/x86_64-linux/lib/
+COPY ./cudnn-linux-x86_64-9.11.0.98_cuda12-archive/include/ /usr/include/
+COPY ./cudnn-linux-x86_64-9.11.0.98_cuda12-archive/include/ /usr/include/x86_64-linux-gnu/
+COPY ./cudnn-linux-x86_64-9.11.0.98_cuda12-archive/lib/ /usr/local/cuda/targets/x86_64-linux/lib/
 
 
 # =========================
@@ -60,11 +60,10 @@ RUN TORCH_CUDA_ARCH_LIST="8.0 9.0 10.0" pip install git+https://github.com/fansh
 # Update latest TE if necessary
 # Use a specific commit instead of main to make it more stable.
 # =========================
-# ARG COMMIT="1c702b4cff6fcee1b92857c283e7c3eb20534923"
-# ARG TE="git+https://github.com/NVIDIA/TransformerEngine.git@${COMMIT}"
-# RUN unset PIP_CONSTRAINT && NVTE_CUDA_ARCHS="80;90;100" NVTE_BUILD_THREADS_PER_JOB=8 NVTE_FRAMEWORK=pytorch pip install --no-cache-dir --no-build-isolation $TE
-RUN NVTE_FRAMEWORK=pytorch NVTE_WITH_USERBUFFERS=1 MPI_HOME=/usr/local/mpi pip install --no-build-isolation \
-    git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.5
+ARG COMMIT="1c702b4cff6fcee1b92857c283e7c3eb20534923"
+ARG TE="git+https://github.com/NVIDIA/TransformerEngine.git@${COMMIT}"
+RUN unset PIP_CONSTRAINT && NVTE_CUDA_ARCHS="80;90;100" NVTE_BUILD_THREADS_PER_JOB=8 NVTE_FRAMEWORK=pytorch pip install --no-cache-dir --no-build-isolation $TE
+
 # =========================
 # Install DeepEP
 # =========================

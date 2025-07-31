@@ -57,7 +57,6 @@ fi
 TRAINING_PARAMS_FROM_CONFIG=$(yq '... comments="" | .MODEL_ARGS | to_entries | .[] | 
     select(.value != "false") | 
     with(select(.value == "true"); .value = "") | 
-    with(select(.key == "--pipeline-model-parallel-layout"); .value = (.value | @json)) | 
     [.key + " " + .value] | join("")' ${TRAINING_PARAMS_PATH} | tr '\n' ' ')
 TRAINING_PARAMS="${TRAINING_PARAMS} ${TRAINING_PARAMS_FROM_CONFIG}"
 
@@ -77,19 +76,52 @@ done < <(echo "${ENV_VARS}" | tr ' ' '\n')
 
 # Virtual pipeline parallelism arguments
 if [[ ${VPP} -gt 1 ]]; then
-    TRAINING_PARAMS="${TRAINING_PARAMS} --num-layers-per-virtual-pipeline-stage ${LAYERS_PER_VP}"
+    if [[ ! "${TRAINING_PARAMS}" =~ "--pipeline-model-parallel-layout" ]] && \
+       [[ ! "${TRAINING_PARAMS}" =~ "--num-virtual-stages-per-pipeline-rank" ]] && \
+       [[ ! "${TRAINING_PARAMS}" =~ "--num-layers-per-virtual-pipeline-stage" ]]; then
+        TRAINING_PARAMS="${TRAINING_PARAMS} --num-virtual-stages-per-pipeline-rank ${VPP}"
+    fi
 fi
 
 # Uneven pipeline parallelism arguments
 if [[ $((NUM_LAYERS % PP)) -ne 0 ]]; then
-    TRAINING_PARAMS="${TRAINING_PARAMS} --decoder-first-pipeline-num-layers ${PP_FIRST} --decoder-last-pipeline-num-layers ${PP_LAST}"
+    if [[ ! "${TRAINING_PARAMS}" =~ "--pipeline-model-parallel-layout" ]]; then
+        TRAINING_PARAMS="${TRAINING_PARAMS} --decoder-first-pipeline-num-layers ${PP_FIRST} --decoder-last-pipeline-num-layers ${PP_LAST}"
+    fi
+fi
+
+OPTIMIZER_OFFLOAD=${OPTIMIZER_OFFLOAD:-0}
+if [[ ${OPTIMIZER_OFFLOAD} == 1 ]]; then
+    TRAINING_PARAMS="${TRAINING_PARAMS} --optimizer-cpu-offload --overlap-cpu-optimizer-d2h-h2d"
 fi
 
 # FP8 arguments
 if [[ ${PR} == "fp8" ]]; then
-    TRAINING_PARAMS="${TRAINING_PARAMS} --fp8-recipe blockwise --fp8-format e4m3 --fp8-param-gather"
+    TRAINING_PARAMS="${TRAINING_PARAMS} --fp8-recipe blockwise --fp8-format e4m3"
+    if [[ ${OPTIMIZER_OFFLOAD} == 0 ]]; then
+        TRAINING_PARAMS="${TRAINING_PARAMS} --fp8-param-gather" # Optimizer CPU offload does not support fp8 param gather now.
+    fi
     TRAINING_PARAMS="${TRAINING_PARAMS} --use-precision-aware-optimizer --main-grads-dtype fp32 --main-params-dtype fp32 --exp-avg-dtype bf16 --exp-avg-sq-dtype bf16"
     TRAINING_PARAMS="${TRAINING_PARAMS} --moe-router-padding-for-fp8"
+fi
+
+# 1F1B overlapping arguments and environment variables
+A2A_OVERLAP=${A2A_OVERLAP:-0}
+if [[ ${A2A_OVERLAP} == 1 ]]; then
+    export CUDA_DEVICE_MAX_CONNECTIONS=32
+    export NVTE_FWD_LAYERNORM_SM_MARGIN=20
+    export NVTE_BWD_LAYERNORM_SM_MARGIN=20
+    TRAINING_PARAMS="${TRAINING_PARAMS} --delay-wgrad-compute --overlap-moe-expert-parallel-comm"
+else
+    export CUDA_DEVICE_MAX_CONNECTIONS=1
+    export NVTE_FWD_LAYERNORM_SM_MARGIN=0
+    export NVTE_BWD_LAYERNORM_SM_MARGIN=0
+    TRAINING_PARAMS="${TRAINING_PARAMS} --overlap-grad-reduce --overlap-param-gather"
+fi
+
+# Long context arguments
+if [[ ${SEQ_LEN} -gt 4096 ]]; then
+    TRAINING_PARAMS="${TRAINING_PARAMS} --max-position-embeddings ${SEQ_LEN}"
 fi
 
 # Profile command
@@ -100,10 +132,10 @@ if [[ ${PROFILE} -eq 1 ]]; then
     PROFILE_CMD="nsys profile --sample=none --cpuctxsw=none -t cuda,nvtx \
         --capture-range=cudaProfilerApi \
         --capture-range-end=stop \
-        --cuda-memory-usage true \
+        --cuda-graph-trace=node \
         -f true -x true \
         -o ${NSYS_PATH}/${MODEL}-benchmarking-${DATETIME}"
-    TRAINING_PARAMS="${TRAINING_PARAMS} --profile --profile-step-start 50 --profile-step-end 55 --profile-ranks 0 "
+    TRAINING_PARAMS="${TRAINING_PARAMS} --profile --profile-step-start 20 --profile-step-end 22 --profile-ranks 0 "
 else
     PROFILE_CMD=""
 fi
@@ -130,7 +162,7 @@ sbatch <<EOF
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=${PARTITION}
 #SBATCH --gpus-per-node=8
-#SBATCH --mem=0
+#SBATCH --ntasks-per-node=8
 #SBATCH --time=${RUN_TIME}
 #SBATCH --job-name=${ACCOUNT}-moe-${RUN_NAME}-${TIMESTAMP}
 #SBATCH --dependency=singleton
@@ -140,9 +172,6 @@ sbatch <<EOF
 srun \
     --mpi=pmix -l \
     --ntasks-per-node=8 \
-    --cpu-bind="verbose,mask_cpu:0x000000000000000000000000000000aa,0x00000000000000000000000000aa0000,0x0000000000000000000000aa00000000,0x000000000000000000aa000000000000,0x00000000000000aa0000000000000000,0x0000000000aa00000000000000000000,0x000000aa000000000000000000000000,0x00aa0000000000000000000000000000" \
-    --mem-bind="verbose,map_mem:0,0,0,0,1,1,1,1" \
-    --distribution=block:*:* \
     --container-image=${CONTAINER_IMAGE} \
     --container-mounts=${CONTAINER_MOUNTS} \
     --container-workdir=${MEGATRON_PATH} \

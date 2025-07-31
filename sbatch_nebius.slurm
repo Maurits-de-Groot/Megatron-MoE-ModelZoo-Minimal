@@ -34,8 +34,9 @@ MORE_ARGS=(
 
     # --enable-cuda-graph
     # --te-rng-tracker
-    # --moe-expert-capacity-factor 1.0
-    # --moe-pad-expert-input-to-capacity
+    --num-layers-per-virtual-pipeline-stage 1
+    --moe-expert-capacity-factor 1.0
+    --moe-pad-expert-input-to-capacity
 )
 
 TRAINING_PARAMS="${MORE_ARGS[@]}"
